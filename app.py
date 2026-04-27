@@ -1,21 +1,18 @@
 import requests
 import re
 import urllib.parse
+import os
 from bs4 import BeautifulSoup
 
 # --- FLASK IMPORTS ---
 from flask import Flask, request, jsonify
-from flask_cors import CORS # Essential for linking to any HTML client
+from flask_cors import CORS
 
 # =================================================================
-# === CORE SCRAPING FUNCTION (EXACTLY AS PROVIDED, MODIFIED RETURN)
+# === CORE SCRAPING FUNCTION (ORIGINAL HEADERS RESTORED)
 # =================================================================
 
 def get_user_info(identifier, by_id=False):
-    """
-    Core scraping logic. Returns a dictionary of user data or None on failure.
-    (This function body is the exact code provided in the original request.)
-    """
     if by_id:
         url = f"https://www.tiktok.com/@{identifier}"
     else:
@@ -23,24 +20,15 @@ def get_user_info(identifier, by_id=False):
             identifier = identifier[1:]
         url = f"https://www.tiktok.com/@{identifier}"
 
- headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate', # <--- WE REMOVED ', br' FROM HERE
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0'
+    # REVERTED TO YOUR EXACT ORIGINAL HEADERS
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
 
     try:
-        response = requests.get(url, headers=headers, timeout=15) # Added timeout for robustness
+        response = requests.get(url, headers=headers, timeout=15)
     except requests.exceptions.RequestException:
-        return None # Indicate network failure
+        return None
 
     if response.status_code == 200:
         html_content = response.text
@@ -81,8 +69,6 @@ def get_user_info(identifier, by_id=False):
         social_links =[]
         bio = info.get('signature', "")
         
-        # ... (Social Links Extraction Logic - EXACTLY AS PROVIDED) ...
-        # METHOD 1: Extract links with target parameter
         link_urls = re.findall(r'href="(https://www\.tiktok\.com/link/v2\?[^"]*?scene=bio_url[^"]*?target=([^"&]+))"', html_content)
         for full_url, target in link_urls:
             target_decoded = urllib.parse.unquote(target)
@@ -96,13 +82,11 @@ def get_user_info(identifier, by_id=False):
             if not any(target_decoded in s for s in social_links):
                 social_links.append(f"Link: {link_text} - {target_decoded}")
             
-        # METHOD 2: Find all SpanLink classes that look like URLs
         span_links = re.findall(r'<span[^>]*class="[^"]*SpanLink[^"]*">([^<]+)</span>', html_content)
         for span_text in span_links:
             if '.' in span_text and ' ' not in span_text and not any(span_text in s for s in social_links):
                 social_links.append(f"Link: {span_text} - {span_text}")
         
-        # METHOD 3: Find all target parameters in URLs
         all_targets = re.findall(r'scene=bio_url[^"]*?target=([^"&]+)', html_content)
         for target in all_targets:
             target_decoded = urllib.parse.unquote(target)
@@ -116,7 +100,6 @@ def get_user_info(identifier, by_id=False):
                 
                 social_links.append(f"Link: {link_text} - {target_decoded}")
         
-        # METHOD 4: Extract bioLink links from JSON
         bio_link_pattern = r'"bioLink":{"link":"([^"]+)","risk":(\d+)}'
         bio_links_matches = re.findall(bio_link_pattern, html_content)
 
@@ -125,7 +108,6 @@ def get_user_info(identifier, by_id=False):
             if not any(clean_link in s for s in social_links):
                 social_links.append(f"💎 **{clean_link}**: `{clean_link}`")
 
-        # Also search for links in other JSON data patterns
         shared_links_pattern = r'"shareUrl":"([^"]+)"'
         shared_links_matches = re.findall(shared_links_pattern, html_content)
 
@@ -134,7 +116,6 @@ def get_user_info(identifier, by_id=False):
             if not any(clean_url in s for s in social_links):
                 social_links.append(f"💎 **{clean_url}**: `{clean_url}`")
 
-        # Also search within divs containing DivShareLinks to ensure we capture all links
         share_links_div_pattern = re.compile(r'<div[^>]*class="[^"]*DivShareLinks[^"]*"[^>]*>(.*?)</div>', re.DOTALL)
         for div_match in share_links_div_pattern.finditer(html_content):
             div_content = div_match.group(1)
@@ -148,27 +129,22 @@ def get_user_info(identifier, by_id=False):
                 if not any(target in s or link_text in s for s in social_links):
                     social_links.append(f"💎 **{link_text}**: `{target}`")
         
-        # Find spans with SpanLink class
         span_matches = re.findall(r'<span[^>]*class="[^"]*SpanLink[^"]*">([^<]+)</span>', html_content)
         for span_text in span_matches:
             if '.' in span_text and not any(span_text in s for s in social_links):
                 social_links.append(f"Link: {span_text} - {span_text}")
         
-        # Look for a specific combination of ABioLink + SpanLink
         biolink_matches = re.findall(r'class="[^"]*ABioLink[^"]*"[^>]*>.*?<span[^>]*class="[^"]*SpanLink[^"]*">([^<]+)</span>', html_content, re.DOTALL)
         for span_text in biolink_matches:
             if not any(span_text in s for s in social_links):
                 social_links.append(f"Link: {span_text} - {span_text}")
         
-        # METHOD 5: Extract Instagram and other social networks mentioned in the bio
-        # Instagram
         ig_pattern = re.search(r'[iI][gG]:\s*@?([a-zA-Z0-9._]+)', bio)
         if ig_pattern:
             instagram_username = ig_pattern.group(1)
             if not any(f"Instagram: @{instagram_username}" in s for s in social_links):
                 social_links.append(f"Instagram: @{instagram_username}")
         
-        # Other social networks in bio
         social_patterns = {
             'snapchat': r'([sS][cC]|[sS]napchat):\s*@?([a-zA-Z0-9._]+)',
             'twitter': r'([tT]witter|[xX]):\s*@?([a-zA-Z0-9._]+)',
@@ -195,7 +171,6 @@ def get_user_info(identifier, by_id=False):
                 if not any(social_link in s for s in social_links):
                     social_links.append(social_link)
         
-        # Look for email addresses in the bio
         email_pattern = re.search(r'[\w.+-]+@[\w-]+\.[\w.-]+', bio)
         if email_pattern:
             email = email_pattern.group(0)
@@ -209,33 +184,18 @@ def get_user_info(identifier, by_id=False):
         return None
 
 # =================================================================
-# === FLASK APPLICATION SETUP (ULTRA SIMPLE API)
+# === FLASK APPLICATION SETUP
 # =================================================================
-import os # Make sure os is imported at the top of your file, or add it here
 
 app = Flask(__name__)
-# Allow requests from any origin (required when linking to a simple HTML file)
 CORS(app) 
 
-# --- NEW: HEALTH CHECK ROUTE FOR UPTIME ROBOT ---
 @app.route('/', methods=['GET'])
 def health_check():
-    """
-    This is the default route. UptimeRobot will ping this URL 
-    to keep the app awake. It returns a simple 200 OK response.
-    """
     return "Bot is alive and running!", 200
 
-
-# --- Ultra Simple API Endpoint ---
 @app.route('/scrape', methods=['GET'])
 def simple_scrape_tiktok():
-    """
-    Handles GET requests using a query parameter for the identifier.
-    Example: GET /scrape?username=charlidamelio
-    """
-    
-    # 1. Input Validation and Parsing (Straightforward GET parameter)
     identifier = request.args.get('username')
     
     if not identifier:
@@ -245,14 +205,11 @@ def simple_scrape_tiktok():
             "code": "MISSING_PARAMETER"
         }), 400
 
-    # Simple heuristic to guess if it's an ID
     by_id = identifier.isdigit()
 
-    # 2. Call the Core Logic
     try:
         user_data = get_user_info(identifier, by_id)
         
-        # 3. Check and Return Results
         if user_data is None:
             return jsonify({
                 "status": "error",
@@ -260,7 +217,6 @@ def simple_scrape_tiktok():
                 "code": "PROFILE_NOT_FOUND_OR_NETWORK_ERROR"
             }), 404
         
-        # Clean up data (convert strings 'true'/'false' to boolean, strings of digits to int)
         cleaned_data = {}
         int_keys =['followers', 'following', 'likes', 'videos', 'commentSetting', 'heart', 'diggCount', 'friendCount']
         
@@ -277,7 +233,6 @@ def simple_scrape_tiktok():
             else:
                 cleaned_data[key] = value.replace('\\n', '\n') if key == 'signature' else value
         
-        # Success Response
         return jsonify({
             "status": "success",
             "identifier_used": identifier,
@@ -285,7 +240,6 @@ def simple_scrape_tiktok():
         }), 200
 
     except Exception as e:
-        # Catch any unexpected error
         print(f"Internal Server Error: {e}") 
         return jsonify({
             "status": "error",
@@ -294,7 +248,5 @@ def simple_scrape_tiktok():
         }), 500
 
 if __name__ == '__main__':
-    # RENDER FIX: Render assigns a dynamic port. 
-    # Also, it MUST be hosted on '0.0.0.0' for Render to see it, not '127.0.0.1'
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
